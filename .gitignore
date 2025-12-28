@@ -2,8 +2,10 @@
 /target/
 Cargo.lock
 
-# Certificate files
-certs/
+# Certificate files (keep MLKEM certificates, ignore CA files)
+certs/ca.*
+certs/*.cnf
+certs/*.srl
 *.crt
 *.key
 *.pem

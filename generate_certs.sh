@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Generate MLKEM certificates for different key sizes
+# Generate MLKEM certificates for different key sizes using CA approach
 set -e
 
 echo "Generating MLKEM certificates..."
@@ -8,56 +8,93 @@ echo "Generating MLKEM certificates..."
 # Create certificates directory
 mkdir -p certs
 
-# Check if MLKEM is supported
-echo "Checking MLKEM support in OpenSSL..."
-/usr/local/ssl/bin/openssl list -public-key-algorithms | grep -i mlkem || {
-    echo "MLKEM not found in OpenSSL, checking available algorithms..."
-    /usr/local/ssl/bin/openssl list -public-key-algorithms
+# Use custom OpenSSL 3.6.0 installation
+OPENSSL_CMD="/usr/local/ssl/bin/openssl"
+export LD_LIBRARY_PATH="/usr/local/ssl/lib:$LD_LIBRARY_PATH"
+
+echo "Using custom OpenSSL 3.6.0 with MLKEM support..."
+$OPENSSL_CMD version
+
+# Check MLKEM algorithm availability
+echo "Checking MLKEM algorithms..."
+$OPENSSL_CMD list -public-key-algorithms | grep -i kem || {
+    echo "ERROR: MLKEM algorithms not found. Checking available algorithms:"
+    $OPENSSL_CMD list -public-key-algorithms
+    exit 1
 }
 
-# Generate MLKEM-512 certificate
-echo "Generating MLKEM-512 certificate..."
-/usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey ml-kem-512 \
-    -keyout certs/mlkem512.key -out certs/mlkem512.crt \
-    -subj "/CN=MLKEM-512 Test" || {
-    echo "Trying alternative MLKEM-512 syntax..."
-    /usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey mlkem512 \
-        -keyout certs/mlkem512.key -out certs/mlkem512.crt \
-        -subj "/CN=MLKEM-512 Test"
-}
+# Generate CA using ML-DSA (supported for signing)
+echo "Generating ML-DSA CA for certificate signing..."
 
-# Generate MLKEM-768 certificate  
-echo "Generating MLKEM-768 certificate..."
-/usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey ml-kem-768 \
-    -keyout certs/mlkem768.key -out certs/mlkem768.crt \
-    -subj "/CN=MLKEM-768 Test" || {
-    echo "Trying alternative MLKEM-768 syntax..."
-    /usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey mlkem768 \
-        -keyout certs/mlkem768.key -out certs/mlkem768.crt \
-        -subj "/CN=MLKEM-768 Test"
-}
+# Use ML-DSA-87 (higher security level)
+$OPENSSL_CMD genpkey -algorithm ml-dsa-87 -out certs/ca.mldsa.key
 
-# Generate MLKEM-1024 certificate
-echo "Generating MLKEM-1024 certificate..."
-/usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey ml-kem-1024 \
-    -keyout certs/mlkem1024.key -out certs/mlkem1024.crt \
-    -subj "/CN=MLKEM-1024 Test" || {
-    echo "Trying alternative MLKEM-1024 syntax..."
-    /usr/local/ssl/bin/openssl req -new -x509 -nodes -days 365 -newkey mlkem1024 \
-        -keyout certs/mlkem1024.key -out certs/mlkem1024.crt \
-        -subj "/CN=MLKEM-1024 Test"
-}
+# Create CA extensions
+cat > certs/ca_ext.cnf <<'EOF'
+[v3_ca]
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
 
-# Verify certificates were created
-echo "Verifying generated certificates..."
-for cert in mlkem512 mlkem768 mlkem1024; do
-    if [ -f "certs/${cert}.crt" ]; then
-        echo "✓ ${cert}.crt created successfully"
-        /usr/local/ssl/bin/openssl x509 -in "certs/${cert}.crt" -text -noout | grep -i "public key algorithm"
-    else
-        echo "✗ ${cert}.crt not found"
-    fi
+# Self-signed CA certificate
+$OPENSSL_CMD req -new -x509 \
+    -key certs/ca.mldsa.key \
+    -subj "/CN=Test ML-DSA CA" \
+    -days 3650 \
+    -out certs/ca.mldsa.crt \
+    -config certs/ca_ext.cnf -extensions v3_ca
+
+echo "CA certificate generated successfully"
+
+# Generate ML-KEM certificates for each key size
+for kem_size in 512 768 1024; do
+    echo ""
+    echo "Generating ML-KEM-${kem_size} key pair..."
+    
+    # Generate ML-KEM key pair
+    $OPENSSL_CMD genpkey -algorithm ml-kem-${kem_size} -out certs/mlkem${kem_size}.key
+    
+    # Extract public key
+    $OPENSSL_CMD pkey -in certs/mlkem${kem_size}.key -pubout -out certs/mlkem${kem_size}.pub
+    
+    echo "Creating ML-KEM-${kem_size} certificate with KEM public key..."
+    
+    # Create EE extensions for KEM key
+    cat > certs/ee_ext_${kem_size}.cnf <<EOF
+[v3_ee_kem]
+basicConstraints = CA:FALSE
+keyUsage = critical, keyEncipherment
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+    
+    # Issue certificate with KEM public key (using force_pubkey)
+    $OPENSSL_CMD x509 -new \
+        -CA certs/ca.mldsa.crt -CAkey certs/ca.mldsa.key -CAcreateserial \
+        -subj "/CN=End-Entity ML-KEM-${kem_size}" \
+        -days 825 \
+        -force_pubkey certs/mlkem${kem_size}.pub \
+        -out certs/mlkem${kem_size}.crt \
+        -extfile certs/ee_ext_${kem_size}.cnf -extensions v3_ee_kem
+    
+    # Verify certificate
+    $OPENSSL_CMD verify -CAfile certs/ca.mldsa.crt certs/mlkem${kem_size}.crt
+    
+    echo "✓ ML-KEM-${kem_size} certificate and key generated"
+    
+    # Check sizes
+    cert_size=$(wc -c < "certs/mlkem${kem_size}.crt")
+    key_size=$(wc -c < "certs/mlkem${kem_size}.key")
+    echo "  Certificate size: ${cert_size} bytes"
+    echo "  Private key size: ${key_size} bytes"
+    
+    # Display certificate info
+    $OPENSSL_CMD x509 -in "certs/mlkem${kem_size}.crt" -noout -text | grep -A5 "Public Key Algorithm" || echo "  Certificate contains ML-KEM public key"
+    
+    echo ""
 done
 
-echo "Certificate generation complete."
+echo "MLKEM certificate generation complete."
 ls -la certs/
