@@ -6,6 +6,7 @@ Cargo.lock
 certs/ca.*
 certs/*.cnf
 certs/*.srl
+*.pub
 *.crt
 *.key
 *.pem
