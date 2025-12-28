@@ -1,0 +1,25 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Certificate files
+certs/
+*.crt
+*.key
+*.pem
+
+# Benchmark results
+benchmark_results.json
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore

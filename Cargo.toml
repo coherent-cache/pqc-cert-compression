@@ -1,0 +1,12 @@
+[package]
+name = "pqc-cert-compression"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zstd = "0.13"
+flate2 = "1.0"
+brotli = "3.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.0", features = ["derive"] }
